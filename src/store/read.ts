@@ -8,6 +8,7 @@ import EpubLast, { Book as BookLast } from 'epubjs'
 import { Book, Rendition, RenditionOptions, PackagingMetadataObject, NavItem, Contents } from '@/types/epubjs'
 import localforage from 'localforage'
 import { getCache, setCache } from '@/utils/localforage'
+import { flatMap, find } from 'lodash-es'
 
 import bg_paper from '@/assets/img/bg-paper.jpg'
 
@@ -40,7 +41,7 @@ export const useReadStore = defineStore('app.read', {
     changeSection: false
   }),
   actions: {
-    loadEpub(bookUrlOrData: string | ArrayBuffer, bookId?: string): Promise<Book> {
+    async loadEpub(bookUrlOrData: string | ArrayBuffer, bookId?: string): Promise<Book> {
       // 每本书一个id，不同书但id相同会导致无法找到目录等情况
       if (typeof bookUrlOrData === 'string') {
         this.bookId = 'EbookReader_Book_' + (bookId || bookUrlOrData)
@@ -50,64 +51,62 @@ export const useReadStore = defineStore('app.read', {
         this.book = new BookLast()
         this.book.open(bookUrlOrData)
       }
-      return this.book.opened.then(async (book) => {
-        // 加载书籍信息并保存
-        const info = (await localforage.getItem(this.bookId)) as Record<string, unknown>
 
-        if (info && info.cover) {
-          this.cover = info.cover as string
-        } else {
-          book.loaded.cover.then(async (cover) => {
-            this.cover = cover
-            await setCache(this.bookId, 'cover', cover)
-          })
-        }
+      const book = await this.book.opened
+      // 加载书籍信息并保存
+      const info = (await localforage.getItem(this.bookId)) as Record<string, unknown>
 
-        if (info && info.metadata) {
-          this.metadata = info.metadata as PackagingMetadataObject
-        } else {
-          book.loaded.metadata.then(async (metadata) => {
-            this.metadata = metadata
-            await setCache(this.bookId, 'metadata', metadata)
-          })
-        }
+      if (info && info.cover) {
+        this.cover = info.cover as string
+      } else {
+        book.loaded.cover.then((cover) => {
+          this.cover = cover
+          setCache(this.bookId, 'cover', cover)
+        })
+      }
 
-        // 把多级目录转换成1级目录，新增一个level属性判断级别
-        if (info && info.toc) {
-          this.toc = info.toc as Array<any>
-        } else {
-          book.loaded.navigation.then(async (nav) => {
-            function flatten(array: NavItem[]): any {
-              return [].concat(...array.map((item: any) => [].concat(item, ...flatten(item.subitems))))
+      if (info && info.metadata) {
+        this.metadata = info.metadata as PackagingMetadataObject
+      } else {
+        book.loaded.metadata.then((metadata) => {
+          this.metadata = metadata
+          setCache(this.bookId, 'metadata', metadata)
+        })
+      }
+
+      function flatten(array: NavItem[]): NavItem[] {
+        return flatMap(array, (item: NavItem) => [item, ...flatten(item.subitems)])
+      }
+      function findLevel(array: NavItem[], item: NavItem, level = 0): any {
+        for (; item.parent; level++) item = find(array, { id: item.parent }) as NavItem
+        return level
+      }
+
+      // 把多级目录转换成1级目录，新增一个level属性判断级别
+      if (info && info.toc) {
+        this.toc = info.toc as Array<any>
+      } else {
+        book.loaded.navigation.then((nav) => {
+          const navItem = flatten(nav.toc)
+          const basePath = book.packaging.navPath ? book.packaging.navPath.split('/') : []
+          const toc = navItem.map((item: any) => {
+            return {
+              ...item,
+              level: findLevel(navItem, item),
+              label: item.label.trim(),
+              href: basePath.length
+                ? item.href.startsWith('#')
+                  ? book.packaging.navPath + item.href
+                  : [...basePath.slice(0, -1), item.href].join('/')
+                : item.href
             }
-            const navItem = flatten(nav.toc)
-            function find(item: NavItem, levle = 0): any {
-              return !item.parent
-                ? levle
-                : find(navItem.filter((parentItem: NavItem) => parentItem.id === item.parent)[0], ++levle)
-            }
-            const basePath = book.packaging.navPath ? book.packaging.navPath.split('/') : false
-            const toc = navItem.map((item: any) => {
-              const obj = { ...item }
-              obj.level = find(obj)
-              obj.label = obj.label.trim()
-              if (basePath) {
-                if (obj.href.startsWith('#')) {
-                  obj.href = book.packaging.navPath + obj.href
-                } else {
-                  basePath[basePath.length - 1] = obj.href
-                  obj.href = basePath.join('/')
-                }
-              }
-              return obj
-            })
-            this.toc = toc
-            await setCache(this.bookId, 'toc', toc)
           })
-        }
+          this.toc = toc
+          setCache(this.bookId, 'toc', toc)
+        })
+      }
 
-        return book
-      })
+      return book
     },
     getRendition(option?: RenditionOptions) {
       const insertRules = `@import url('${option.stylesheet}');

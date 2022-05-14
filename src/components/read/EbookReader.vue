@@ -63,6 +63,10 @@ export default defineComponent({
     let timeStart = 0
     let enableTouch = false
     let touchDetail = null as TouchEvent
+    let width = ref(0)
+    let loading = ref(true)
+    width.value = getWidth()
+
     const img = reactive({
       src: '',
       alt: ''
@@ -162,49 +166,45 @@ export default defineComponent({
       // eslint-disable-next-line vue/no-setup-props-destructure
       let path = ''
       let id = null
-      if (!props.path || props.path === '' || props.path === 'indent') {
-        if (props.path === 'indent') {
-          try {
-            ;[path, id] = await getIndentFile()
-          } catch (e) {
-            message.error(`${e}`)
-          }
-        } else path = './Test2/OEBPS/content.opf'
+      if (!props.path || props.path === '') {
+        path = './Test2/OEBPS/content.opf'
+      } else if (props.path === 'indent') {
+        try {
+          ;[path, id] = await getIndentFile()
+        } catch (e) {
+          message.error(`${e}`)
+        }
       } else {
         // id是文件的md5，每本书唯一
         ;[path, id] = await getEpubPath(props.path)
       }
 
-      let cssUrl = window.location.href.split('#')[0].split('/')
-      cssUrl[cssUrl.length - 1] = readCss
-
       // 原生实现解压，这里再读取，可以加快读取速度
       // 仅限于本地文件，网络文件的跨章节翻页有点问题
-      readStore.loadEpub(path, id || path).then(async (book) => {
-        console.log(book)
-        readStore.getRendition({
-          // 预加载
-          // manager: 'continuous'
-          stylesheet: cssUrl.join('/')
-          // snap: true,
-          // flow: 'paginated'
-        })
-
-        if (!('ontouchstart' in window)) {
-          readStore.rendition!.on('mousedown', (e: any) => {
-            timeStart = e.timeStamp
-          })
-          readStore.rendition!.on('mouseup', handleMouseDown)
-        }
-
-        readStore.rendition!.hooks.content.register((content: Contents) => {
-          initEvent(content.window)
-        })
-
-        const location = await readStore.getLocation()
-        await readStore.display(location)
-        loading.value = false
+      const book = await readStore.loadEpub(path, id || path)
+      console.log(book)
+      readStore.getRendition({
+        // 预加载
+        // manager: 'continuous',
+        stylesheet: `${window.location.origin}/${readCss}`
+        // snap: true,
+        // flow: 'paginated'
       })
+
+      if (!('ontouchstart' in window)) {
+        readStore.rendition!.on('mousedown', (e: any) => {
+          timeStart = e.timeStamp
+        })
+        readStore.rendition!.on('mouseup', handleMouseDown)
+      }
+
+      readStore.rendition!.hooks.content.register((content: Contents) => {
+        initEvent(content.window)
+      })
+
+      const location = await readStore.getLocation()
+      await readStore.display(location)
+      loading.value = false
     })
     onUnmounted(() => {
       const bookshelfStore = useBookshelfStore()
@@ -212,10 +212,6 @@ export default defineComponent({
         bookshelfStore.moveFunction()
       }
     })
-
-    let width = ref(0)
-    let loading = ref(true)
-    width.value = getWidth()
 
     return {
       width,
